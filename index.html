@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>WebAR Balance Scale</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.166.1/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.166.1/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <main id="app">
+    <canvas id="scene" aria-label="3D天秤デモ"></canvas>
+
+    <div class="camera-panel" aria-label="手認識カメラ">
+      <video id="handVideo" playsinline muted></video>
+      <canvas id="handOverlay"></canvas>
+      <span id="handStatus">カメラ待機中</span>
+    </div>
+
+    <div id="handCursor" aria-hidden="true"></div>
+    <canvas id="handRig" aria-hidden="true"></canvas>
+
+    <section class="hud" aria-label="操作パネル">
+      <div class="brand">
+        <span class="mark"></span>
+        <div>
+          <h1>XR Balance</h1>
+          <p id="modeText">3Dモード</p>
+        </div>
+      </div>
+
+      <div class="readout">
+        <div>
+          <span>左皿</span>
+          <strong id="leftMass">0g</strong>
+        </div>
+        <div>
+          <span>右皿</span>
+          <strong id="rightMass">0g</strong>
+        </div>
+        <div>
+          <span>傾き</span>
+          <strong id="tiltValue">0.0°</strong>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="handButton" type="button">手で操作</button>
+        <button id="arButton" type="button">AR開始</button>
+        <button id="resetButton" type="button">リセット</button>
+      </div>
+    </section>
+
+    <p class="hint" id="hint">重りをドラッグして皿の上で離してください</p>
+  </main>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
