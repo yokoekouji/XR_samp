@@ -46,6 +46,7 @@ const tempWorld = new THREE.Vector3();
 const labRoot = new THREE.Group();
 const draggableBeakers = [];
 const beakers = [];
+const handModels = [];
 const pourFx = {
   group: null,
   core: null,
@@ -109,6 +110,17 @@ const mats = {
   }),
   streamHighlight: new THREE.MeshBasicMaterial({ color: 0xb7f7ff, transparent: true, opacity: 0.52 }),
   foam: new THREE.MeshBasicMaterial({ color: 0xd9fbff, transparent: true, opacity: 0.58, depthWrite: false }),
+  handSkin: new THREE.MeshPhysicalMaterial({
+    color: 0x9be7ff,
+    roughness: 0.18,
+    transparent: true,
+    opacity: 0.28,
+    transmission: 0.35,
+    thickness: 0.06,
+    depthWrite: false
+  }),
+  handBone: new THREE.MeshBasicMaterial({ color: 0xcff8ff, transparent: true, opacity: 0.46, depthWrite: false }),
+  handPinch: new THREE.MeshBasicMaterial({ color: 0xffd58a, transparent: true, opacity: 0.62, depthWrite: false }),
   table: new THREE.MeshStandardMaterial({ color: 0x53626a, metalness: 0.18, roughness: 0.46 }),
   ceramic: new THREE.MeshStandardMaterial({ color: 0xe8eef0, metalness: 0.04, roughness: 0.36 }),
   ink: new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.62 }),
@@ -173,6 +185,98 @@ function initScene() {
   buildLabBench();
   buildBeakers();
   buildPourStream();
+  buildHandModels();
+}
+
+function buildHandModels() {
+  for (let handIndex = 0; handIndex < 2; handIndex += 1) {
+    const group = new THREE.Group();
+    group.visible = false;
+    group.renderOrder = 20;
+
+    const joints = Array.from({ length: 21 }, (_, index) => {
+      const joint = new THREE.Mesh(
+        new THREE.SphereGeometry(index === 0 ? 0.045 : 0.028, 18, 12),
+        index === 4 || index === 8 ? mats.handPinch.clone() : mats.handSkin.clone()
+      );
+      joint.renderOrder = 21;
+      joint.material.depthTest = false;
+      group.add(joint);
+      return joint;
+    });
+
+    const bones = handConnections.map(([a, b]) => {
+      const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.018, 1, 14), mats.handBone.clone());
+      bone.userData = { a, b };
+      bone.renderOrder = 20;
+      bone.material.depthTest = false;
+      group.add(bone);
+      return bone;
+    });
+
+    const palm = new THREE.Mesh(
+      new THREE.CircleGeometry(0.18, 48),
+      new THREE.MeshBasicMaterial({
+        color: handIndex === 0 ? 0x68d8c8 : 0x86a8ff,
+        transparent: true,
+        opacity: 0.2,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide
+      })
+    );
+    palm.renderOrder = 19;
+    group.add(palm);
+
+    scene.add(group);
+    handModels.push({ group, joints, bones, palm, points: Array.from({ length: 21 }, () => new THREE.Vector3()) });
+  }
+}
+
+function hideHandModels() {
+  handModels.forEach((model) => {
+    model.group.visible = false;
+  });
+}
+
+function updateHandModel(handIndex, landmarks, depth, pinching) {
+  const model = handModels[handIndex];
+  if (!model) return;
+
+  const distanceFromCamera = THREE.MathUtils.lerp(1.85, 1.08, THREE.MathUtils.clamp(depth, 0, 1));
+  landmarks.forEach((landmark, index) => {
+    const ndc = new THREE.Vector3((1 - landmark.x) * 2 - 1, 1 - landmark.y * 2, 0.18);
+    const world = ndc.unproject(camera);
+    const direction = world.sub(camera.position).normalize();
+    const zOffset = THREE.MathUtils.clamp(-(landmark.z || 0) * 0.85, -0.16, 0.18);
+    model.points[index].copy(camera.position).add(direction.multiplyScalar(distanceFromCamera + zOffset));
+    model.joints[index].position.copy(model.points[index]);
+    model.joints[index].scale.setScalar(index === 4 || index === 8 ? (pinching ? 1.35 : 1.05) : 1);
+  });
+
+  model.bones.forEach((bone) => {
+    const a = model.points[bone.userData.a];
+    const b = model.points[bone.userData.b];
+    const mid = a.clone().lerp(b, 0.5);
+    const length = a.distanceTo(b);
+    bone.position.copy(mid);
+    bone.scale.set(1, Math.max(length, 0.001), 1);
+    bone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+  });
+
+  const palmCenter = model.points[0].clone()
+    .add(model.points[5])
+    .add(model.points[9])
+    .add(model.points[13])
+    .add(model.points[17])
+    .multiplyScalar(0.2);
+  const palmWidth = model.points[5].distanceTo(model.points[17]);
+  const palmHeight = model.points[0].distanceTo(model.points[9]);
+  const palmNormal = model.points[5].clone().sub(model.points[17]).cross(model.points[0].clone().sub(model.points[9])).normalize();
+  model.palm.position.copy(palmCenter);
+  model.palm.scale.set(Math.max(palmWidth * 2.1, 0.12), Math.max(palmHeight * 1.8, 0.12), 1);
+  model.palm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), palmNormal.lengthSq() > 0 ? palmNormal : new THREE.Vector3(0, 0, 1));
+  model.group.visible = true;
 }
 
 function buildLabBench() {
@@ -795,6 +899,7 @@ function stopHandControl() {
   });
   overlayCtx.clearRect(0, 0, handOverlay.width, handOverlay.height);
   clearViewportRig();
+  hideHandModels();
 
   if (handState.stream) {
     handState.stream.getTracks().forEach((track) => track.stop());
@@ -835,6 +940,7 @@ function processHandResult(result) {
       hand.pinching = false;
       hand.wasPinching = false;
     });
+    hideHandModels();
     document.body.classList.remove('hand-pinching', 'hand-tracked');
     document.body.classList.add('hand-searching');
     drawSearchRig();
@@ -852,6 +958,7 @@ function processHandResult(result) {
     if (!landmarks) {
       cursor.style.opacity = '0';
       cursor.classList.remove('pinching');
+      if (handModels[index]) handModels[index].group.visible = false;
       if (hand.activeBeaker) endDragAtClient(hand.x, hand.y, hand);
       hand.pinching = false;
       hand.wasPinching = false;
@@ -869,6 +976,7 @@ function processHandResult(result) {
 
     const pinchDistance = distance(indexTip, thumbTip);
     hand.pinching = hand.pinching ? pinchDistance < 0.085 : pinchDistance < 0.055;
+    if (handModels[index]) handModels[index].group.visible = false;
     cursor.style.left = `${hand.x}px`;
     cursor.style.top = `${hand.y}px`;
     cursor.style.opacity = '1';
@@ -1003,15 +1111,107 @@ function drawViewportRig(landmarkSets) {
       x: (1 - point.x) * window.innerWidth,
       y: point.y * window.innerHeight
     }));
-    rigCtx.strokeStyle = handIndex === 0 ? 'rgba(80, 190, 168, 0.55)' : 'rgba(109, 142, 214, 0.55)';
-    rigCtx.lineWidth = 3;
-    for (const [a, b] of handConnections) {
-      rigCtx.beginPath();
-      rigCtx.moveTo(points[a].x, points[a].y);
-      rigCtx.lineTo(points[b].x, points[b].y);
-      rigCtx.stroke();
-    }
+    const pinchDistance = Math.hypot(points[4].x - points[8].x, points[4].y - points[8].y);
+    drawHandSurface(points, handIndex);
+    drawHandBoneLines(points, handIndex);
+    drawHandJointDots(points, pinchDistance < 54);
   });
+}
+
+function drawHandSurface(points, handIndex) {
+  const surface = handIndex === 0 ? 'rgba(70, 188, 162, 0.26)' : 'rgba(96, 144, 214, 0.24)';
+  const glow = handIndex === 0 ? 'rgba(91, 221, 195, 0.12)' : 'rgba(130, 171, 235, 0.11)';
+  const fingerChains = [
+    [0, 1, 2, 3, 4],
+    [0, 5, 6, 7, 8],
+    [0, 9, 10, 11, 12],
+    [0, 13, 14, 15, 16],
+    [0, 17, 18, 19, 20]
+  ];
+
+  rigCtx.save();
+  rigCtx.lineCap = 'round';
+  rigCtx.lineJoin = 'round';
+  fingerChains.forEach((chain) => {
+    drawSmoothHandPath(points, chain);
+    rigCtx.strokeStyle = glow;
+    rigCtx.lineWidth = 58;
+    rigCtx.stroke();
+    drawSmoothHandPath(points, chain);
+    rigCtx.strokeStyle = surface;
+    rigCtx.lineWidth = 38;
+    rigCtx.stroke();
+  });
+
+  const wrist = points[0];
+  rigCtx.beginPath();
+  rigCtx.moveTo(wrist.x, wrist.y);
+  [1, 5, 9, 13, 17].forEach((index) => {
+    const point = points[index];
+    rigCtx.lineTo(point.x, point.y);
+  });
+  rigCtx.closePath();
+  rigCtx.fillStyle = surface;
+  rigCtx.fill();
+  rigCtx.restore();
+}
+
+function drawHandBoneLines(points, handIndex) {
+  const core = handIndex === 0 ? 'rgba(117, 238, 218, 0.94)' : 'rgba(148, 184, 246, 0.92)';
+  rigCtx.save();
+  rigCtx.lineCap = 'round';
+  rigCtx.lineJoin = 'round';
+  handConnections.forEach(([a, b]) => {
+    rigCtx.beginPath();
+    rigCtx.moveTo(points[a].x, points[a].y);
+    rigCtx.lineTo(points[b].x, points[b].y);
+    rigCtx.strokeStyle = 'rgba(2, 17, 19, 0.92)';
+    rigCtx.lineWidth = 7;
+    rigCtx.stroke();
+    rigCtx.strokeStyle = core;
+    rigCtx.lineWidth = 3;
+    rigCtx.stroke();
+  });
+  rigCtx.restore();
+}
+
+function drawHandJointDots(points, pinching) {
+  rigCtx.save();
+  points.forEach((point, index) => {
+    const isPinchPoint = index === 4 || index === 8;
+    const radius = isPinchPoint ? 7 : 5;
+    if (isPinchPoint) {
+      rigCtx.beginPath();
+      rigCtx.arc(point.x, point.y, pinching ? 18 : 14, 0, Math.PI * 2);
+      rigCtx.fillStyle = pinching ? 'rgba(240, 181, 77, 0.32)' : 'rgba(240, 181, 77, 0.18)';
+      rigCtx.fill();
+      rigCtx.beginPath();
+      rigCtx.arc(point.x, point.y, pinching ? 10 : 8, 0, Math.PI * 2);
+      rigCtx.fillStyle = 'rgba(240, 181, 77, 0.95)';
+      rigCtx.fill();
+    }
+    rigCtx.beginPath();
+    rigCtx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    rigCtx.fillStyle = isPinchPoint ? 'rgba(240, 181, 77, 0.95)' : 'rgba(247, 252, 248, 0.98)';
+    rigCtx.fill();
+    rigCtx.lineWidth = 2.5;
+    rigCtx.strokeStyle = 'rgba(3, 18, 20, 0.9)';
+    rigCtx.stroke();
+  });
+  rigCtx.restore();
+}
+
+function drawSmoothHandPath(points, indices) {
+  rigCtx.beginPath();
+  const first = points[indices[0]];
+  rigCtx.moveTo(first.x, first.y);
+  for (let i = 1; i < indices.length - 1; i += 1) {
+    const current = points[indices[i]];
+    const next = points[indices[i + 1]];
+    rigCtx.quadraticCurveTo(current.x, current.y, (current.x + next.x) * 0.5, (current.y + next.y) * 0.5);
+  }
+  const last = points[indices[indices.length - 1]];
+  rigCtx.lineTo(last.x, last.y);
 }
 
 function distance(a, b) {
